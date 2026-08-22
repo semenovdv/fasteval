@@ -218,8 +218,27 @@ Blank lines are skipped. Every output receives a verdict
 pass rates per model, and structured outputs already parsed as JSON count as
 valid for `json_valid`.
 
-Repeat runs: `-n/--nruns 3` executes every case three times — useful to see
-whether differences between models are stable or luck.
+### Statistics across repeated runs
+
+With `-n/--nruns N` (N ≥ 2) reports gain a **Statistics** section and
+`run.json` gains a `statistics` object, so you can tell signal from noise:
+
+- **Per-model dispersion** — mean ± std and coefficient of variation for
+  latency, throughput and cost across attempts.
+- **Pass rate with Wilson 95% CI** — e.g. `67% [30–90%]`; a wide interval at
+  small samples is shown honestly instead of a deceptively exact number.
+- **Output consistency** — share of cases where all attempts of a model
+  produced identical outputs (deterministic models score 100%).
+- **Pairwise comparison** — for every model pair with scored cases: Δ pass
+  rate plus a verdict. Overlapping Wilson intervals are reported as *not
+  distinguishable at this sample size* rather than as a fabricated p-value;
+  add more cases or runs before concluding that one model leads.
+
+Methodology note: intervals are Wilson score intervals; no distributional
+assumptions beyond the binomial proportion. The tool deliberately avoids
+p-value theatre on tiny samples.
+
+Repeat runs: `-n/--nruns 3` executes every case three times.
 
 ## 7. Structured output
 
