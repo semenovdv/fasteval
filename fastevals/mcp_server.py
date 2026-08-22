@@ -228,6 +228,7 @@ def _read_run_summary(path: Path) -> dict[str, Any]:
         "errors": sum(1 for row in results if row.get("error")),
         "pass_rate": (sum(1 for row in scored if row["evaluation"]["passed"]) / len(scored) if scored else None),
         "total_cost_usd": sum(row.get("total_cost_usd") or 0 for row in results),
+        "statistics": payload.get("statistics"),
         "html_report": str(path.parent / "report.html"),
     }
 

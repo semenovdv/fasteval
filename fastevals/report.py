@@ -10,6 +10,7 @@ from typing import Any
 
 from .config import RunConfig
 from .models import RunResult
+from .stats import compute_statistics
 
 __all__ = ["save_report"]
 
@@ -158,6 +159,82 @@ def _render_aggregate_table(results: list[RunResult]) -> str:
         "<thead><tr><th>Model</th><th>Runs</th><th>Success</th>"
         "<th>Pass rate</th><th>Avg latency</th><th>Total cost</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+
+
+def _render_statistics_card(results: list[RunResult], config: RunConfig) -> str:
+    """Per-model dispersion, pass-rate confidence intervals and pairwise verdicts."""
+    stats = compute_statistics(results)
+    rows = []
+    for label, entry in stats["per_model"].items():
+        latency = entry["latency_ms"]
+        tps = entry["tokens_per_second"]
+        cost = entry["cost_usd_per_run"]
+        if entry.get("pass_rate") is not None:
+            lo, hi = entry["pass_rate_ci95"]
+            pass_cell = f"{entry['pass_rate'] * 100:.0f}% <span class='muted'>[{lo * 100:.0f}-{hi * 100:.0f}%]</span>"
+        else:
+            pass_cell = "<span class='muted'>—</span>"
+
+        def fmt(stat: dict[str, Any] | None, unit: str = "") -> str:
+            if not stat or stat.get("mean") is None:
+                return "<span class='muted'>—</span>"
+            cell = f"{stat['mean']:,.1f}{unit}"
+            if stat.get("std") is not None:
+                cv = f" (±{stat['std']:,.1f})" if stat["std"] else ""
+                return f"{cell}{cv}"
+            return cell
+
+        consistency = (
+            f"{entry['output_consistency'] * 100:.0f}%"
+            if entry.get("output_consistency") is not None
+            else "<span class='muted'>—</span>"
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{_escape(label)}</td><td>{entry['runs']}</td>"
+            f"<td>{pass_cell}</td>"
+            f"<td>{fmt(latency, ' ms')}</td>"
+            f"<td>{fmt(tps, ' t/s')}</td>"
+            f"<td>{fmt(cost)}</td>"
+            f"<td>{consistency}</td>"
+            "</tr>"
+        )
+
+    pair_rows_list: list[str] = []
+    for pair in stats["pairwise"]:
+        marker = "&#9989; " if pair["verdict"].startswith(("A ", "B ")) else "&#10134; "
+        pair_rows_list.append(
+            "<tr>"
+            f"<td>{_escape(pair['a'])}</td><td>{_escape(pair['b'])}</td>"
+            f"<td>{pair['delta_pass_rate'] * 100:+.0f}%</td>"
+            f"<td>{marker}{_escape(pair['verdict'])}</td>"
+            "</tr>"
+        )
+    pair_rows = "".join(pair_rows_list) or (
+        "<tr><td colspan='4'><span class='muted'>No scored cases to compare.</span></td></tr>"
+    )
+
+    head_stats = (
+        "<tr><th>Model</th><th>Runs</th><th>Pass rate [95% CI]</th>"
+        "<th>Latency</th><th>Throughput</th><th>Cost / run</th><th>Output consistency</th></tr>"
+    )
+    head_pairs = "<tr><th>Model A</th><th>Model B</th><th>Δ pass rate</th><th>Verdict</th></tr>"
+    note = (
+        "<p class='muted' style='margin:10px 0 0'>Pass-rate intervals are Wilson score "
+        "(95%). Overlapping intervals mean the difference is not distinguishable from "
+        "noise at this sample size — add more cases or runs before concluding.</p>"
+    )
+    pairs_block = (
+        f"<h3 class='section-title' style='font-size:15px;margin-top:18px'>Pairwise pass-rate comparison</h2>"
+        f"<div class='table-wrap'><table class='comparison-table'><thead>{head_pairs}</thead>"
+        f"<tbody>{pair_rows}</tbody></table></div>{note}"
+    )
+    return (
+        "<section class='card' style='margin-bottom:20px'>"
+        "<h2 class='section-title'>Statistics</h2>"
+        f"<div class='table-wrap'><table class='comparison-table'><thead>{head_stats}</thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>" + pairs_block + "</section>"
     )
 
 
@@ -376,6 +453,7 @@ def render_html_report(config: RunConfig, results: list[RunResult], created_at: 
         if show_aggregates
         else ""
     )
+    stats_section = _render_statistics_card(results, config) if show_aggregates else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -643,6 +721,7 @@ def render_html_report(config: RunConfig, results: list[RunResult], created_at: 
     </section>
 
     {aggregate_section}
+    {stats_section}
 
     <section>
       <h2 class="section-title">Detailed results</h2>
@@ -816,6 +895,7 @@ def save_report(
         "structured_output": config.structured_output,
         "created_at": created_at,
         "results": [row.as_dict() for row in results],
+        "statistics": compute_statistics(results),
         "markdown_summary": _markdown_export(results),
     }
     json_path = run_dir / "run.json"
